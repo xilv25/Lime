@@ -1,5 +1,7 @@
-// index.js — FINAL FULL (CommonJS)
-// All-in-one: /bypass pinned embed, DM screenshot flow, already-paid, queue, on/off, robust modal handling, keepalive.
+// index.js — FINAL (WITH IMMEDIATE /on /off BUTTON DISABLE FIX)
+// All features preserved. Only change: on /on or /off, bot immediately edits existing pinned bypass embed(s)
+// to disable/enable the corresponding moderator button(s).
+
 const fs = require('fs');
 const path = require('path');
 const {
@@ -143,6 +145,24 @@ async function deployCommands() {
   }
 }
 
+/* ======= Helper: build embed and row (used for edits) ======= */
+function makeBypassEmbed() {
+  return new EmbedBuilder()
+    .setTitle('Bypass Service — Rp. 3.000/hari')
+    .setDescription('Kirim bukti transfer di DM. Tombol biru akan mengarahkan Anda ke moderator online dengan antrian paling sedikit.')
+    .setColor(0x2B6CB0)
+    .addFields(...queueStatusFields())
+    .setFooter({ text: 'made by @unstoppable_neid' })
+    .setTimestamp();
+}
+function makeBypassRow() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('assign_btn_jojo').setLabel('Contact Jojo').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['08170512639']),
+    new ButtonBuilder().setCustomId('assign_btn_whoisnda').setLabel('Contact WhoisNda').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['085219498004']),
+    new ButtonBuilder().setCustomId('already_paid').setLabel('Already Paid ✅').setStyle(ButtonStyle.Success)
+  );
+}
+
 /* ======= Embed refresher (single pinned embed) ======= */
 async function startEmbedRefresher(message) {
   if (!message || !message.id) return;
@@ -153,26 +173,63 @@ async function startEmbedRefresher(message) {
       if (!BYPASS_EMBEDS.has(message.id)) return clearInterval(interval);
       const msg = BYPASS_EMBEDS.get(message.id);
       if (!msg) return clearInterval(interval);
-      const newEmbed = new EmbedBuilder()
-        .setTitle('Bypass Service — Rp. 3.000/hari')
-        .setDescription('Kirim bukti transfer di DM. Tombol biru akan mengarahkan Anda ke moderator online dengan antrian paling sedikit.')
-        .setColor(0x2B6CB0)
-        .addFields(...queueStatusFields())
-        .setFooter({ text: 'made by @unstoppable_neid' })
-        .setTimestamp();
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('assign_btn_jojo').setLabel('Contact Jojo').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['08170512639']),
-        new ButtonBuilder().setCustomId('assign_btn_whoisnda').setLabel('Contact WhoisNda').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['085219498004']),
-        new ButtonBuilder().setCustomId('already_paid').setLabel('Already Paid ✅').setStyle(ButtonStyle.Success)
-      );
-      if (msg.editable) await msg.edit({ embeds: [newEmbed], components: [row] });
-      else {
-        const fetched = await msg.channel.messages.fetch(msg.id).catch(()=>null);
-        if (fetched && fetched.editable) await fetched.edit({ embeds: [newEmbed], components: [row] });
-        else { BYPASS_EMBEDS.delete(message.id); clearInterval(interval); }
-      }
+      try {
+        if (msg.editable) await msg.edit({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] });
+        else {
+          const fetched = await msg.channel.messages.fetch(msg.id).catch(()=>null);
+          if (fetched && fetched.editable) await fetched.edit({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] });
+          else { BYPASS_EMBEDS.delete(message.id); clearInterval(interval); }
+        }
+      } catch (e) { BYPASS_EMBEDS.delete(message.id); clearInterval(interval); }
     } catch (e) { BYPASS_EMBEDS.delete(message.id); clearInterval(interval); }
   }, 5000);
+}
+
+/* ======= NEW: Immediate update function to edit existing pinned bypass embeds' buttons ======= */
+async function updatePinnedBypassEmbedsButtons() {
+  // First update all cached BYPASS_EMBEDS messages
+  for (const [msgId, msg] of BYPASS_EMBEDS.entries()) {
+    try {
+      if (!msg) { BYPASS_EMBEDS.delete(msgId); continue; }
+      if (msg.editable) {
+        await msg.edit({ components: [makeBypassRow()] }).catch(()=>{});
+      } else {
+        // try fetching and editing
+        try {
+          const fetched = await msg.channel.messages.fetch(msg.id).catch(()=>null);
+          if (fetched && fetched.editable) await fetched.edit({ components: [makeBypassRow()] }).catch(()=>{});
+          else BYPASS_EMBEDS.delete(msgId);
+        } catch (e) { BYPASS_EMBEDS.delete(msgId); }
+      }
+    } catch (e) {
+      BYPASS_EMBEDS.delete(msgId);
+    }
+  }
+
+  // additionally, try to find any pinned messages in BYPASS_CHANNEL_ID and edit them (in case they exist but not cached)
+  try {
+    const channelId = BYPASS_CHANNEL_ID;
+    if (channelId) {
+      const chan = await client.channels.fetch(channelId).catch(()=>null);
+      if (chan && chan.isTextBased()) {
+        const pinned = await chan.messages.fetchPinned().catch(()=>null);
+        if (pinned && pinned.size) {
+          for (const [, m] of pinned) {
+            if (m.author && m.author.id === client.user.id) {
+              // only edit if it's a bypass embed (title check optional)
+              const title = m.embeds?.[0]?.title || '';
+              if (title && title.startsWith('Bypass Service')) {
+                try { if (m.editable) await m.edit({ components: [makeBypassRow()] }).catch(()=>{}); } catch(e){ }
+                BYPASS_EMBEDS.set(m.id, m);
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (e) {
+    // ignore
+  }
 }
 
 /* ======= Forward request to mod (creates PENDING + FORWARD_MAP) ======= */
@@ -210,23 +267,14 @@ async function forwardRequestToMod(userId, mod, titleSuffix = '', link = '') {
 async function refreshAll() {
   for (const [msgId, msg] of BYPASS_EMBEDS.entries()) {
     try {
-      const newEmbed = new EmbedBuilder()
-        .setTitle('Bypass Service — Rp. 3.000/hari')
-        .setDescription('Kirim bukti transfer di DM. Tombol biru akan mengarahkan Anda ke moderator online dengan antrian paling sedikit.')
-        .setColor(0x2B6CB0)
-        .addFields(...queueStatusFields())
-        .setFooter({ text: 'made by @unstoppable_neid' })
-        .setTimestamp();
-      const row = new ActionRowBuilder().addComponents(
-        new ButtonBuilder().setCustomId('assign_btn_jojo').setLabel('Contact Jojo').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['08170512639']),
-        new ButtonBuilder().setCustomId('assign_btn_whoisnda').setLabel('Contact WhoisNda').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['085219498004']),
-        new ButtonBuilder().setCustomId('already_paid').setLabel('Already Paid ✅').setStyle(ButtonStyle.Success)
-      );
-      if (msg.editable) await msg.edit({ embeds: [newEmbed], components: [row] });
+      if (!msg) { BYPASS_EMBEDS.delete(msgId); continue; }
+      if (msg.editable) await msg.edit({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] }).catch(()=>{});
       else {
-        const fetched = await msg.channel.messages.fetch(msg.id).catch(()=>null);
-        if (fetched && fetched.editable) await fetched.edit({ embeds: [newEmbed], components: [row] });
-        else BYPASS_EMBEDS.delete(msgId);
+        try {
+          const fetched = await msg.channel.messages.fetch(msg.id).catch(()=>null);
+          if (fetched && fetched.editable) await fetched.edit({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] });
+          else BYPASS_EMBEDS.delete(msgId);
+        } catch (e) { BYPASS_EMBEDS.delete(msgId); }
       }
     } catch (e) { BYPASS_EMBEDS.delete(msgId); }
   }
@@ -247,10 +295,8 @@ client.on('interactionCreate', async (interaction) => {
 
       // /bypass: create or reuse pinned embed
       if (cmd === 'bypass') {
-        // reply ephemeral to acknowledge
         await interaction.reply({ content: 'Mempersiapkan panel bypass (pinned)...', ephemeral: true });
 
-        // choose channel: BYPASS_CHANNEL_ID or the channel where command invoked
         const targetChannelId = BYPASS_CHANNEL_ID || interaction.channelId;
         let channel = null;
         try { channel = await client.channels.fetch(targetChannelId).catch(()=>null); } catch (e) { channel = null; }
@@ -273,29 +319,17 @@ client.on('interactionCreate', async (interaction) => {
           }
         } catch (e) { botPinned = null; }
 
-        const makeEmbed = () => new EmbedBuilder()
-          .setTitle('Bypass Service — Rp. 3.000/hari')
-          .setDescription('Kirim bukti transfer di DM. Tombol biru akan mengarahkan Anda ke moderator online dengan antrian paling sedikit.')
-          .setColor(0x2B6CB0)
-          .addFields(...queueStatusFields())
-          .setFooter({ text: 'made by @unstoppable_neid' })
-          .setTimestamp();
-
-        const makeRow = () => new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('assign_btn_jojo').setLabel('Contact Jojo').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['08170512639']),
-          new ButtonBuilder().setCustomId('assign_btn_whoisnda').setLabel('Contact WhoisNda').setStyle(ButtonStyle.Primary).setDisabled(!ONLINE['085219498004']),
-          new ButtonBuilder().setCustomId('already_paid').setLabel('Already Paid ✅').setStyle(ButtonStyle.Success)
-        );
-
         try {
           if (botPinned) {
-            try { await botPinned.edit({ embeds: [makeEmbed()], components: [makeRow()] }); } catch (e) {}
+            try { await botPinned.edit({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] }); } catch (e) {}
             startEmbedRefresher(botPinned);
+            BYPASS_EMBEDS.set(botPinned.id, botPinned);
             return interaction.followUp({ content: 'Panel bypass sudah dibuat dan di-pin.', ephemeral: true });
           } else {
-            const sent = await channel.send({ embeds: [makeEmbed()], components: [makeRow()] });
+            const sent = await channel.send({ embeds: [makeBypassEmbed()], components: [makeBypassRow()] });
             try { await sent.pin().catch(()=>{}); } catch (e) {}
             startEmbedRefresher(sent);
+            BYPASS_EMBEDS.set(sent.id, sent);
             return interaction.followUp({ content: 'Panel bypass dibuat dan dipin.', ephemeral: true });
           }
         } catch (e) {
@@ -303,14 +337,18 @@ client.on('interactionCreate', async (interaction) => {
         }
       }
 
-      // /on, /off for mods
+      // /on, /off for mods — NEW: immediate edit of pinned embed buttons
       if (cmd === 'on' || cmd === 'off') {
         if (!MOD_ID_TO_ACCOUNT[interaction.user.id]) return interaction.reply({ content: 'Khusus moderator.', ephemeral: true });
         const acc = MOD_ID_TO_ACCOUNT[interaction.user.id];
         ONLINE[acc] = (cmd === 'on');
         await interaction.reply({ content: `Statusmu sekarang: ${ONLINE[acc] ? 'ONLINE' : 'OFFLINE'}`, ephemeral: true });
-        // refresh UI
-        await refreshAll();
+
+        // IMMEDIATE: update buttons on pinned bypass embed(s) without sending notifications
+        try {
+          await updatePinnedBypassEmbedsButtons();
+        } catch (e) { /* ignore errors here */ }
+
         return;
       }
 
@@ -389,7 +427,7 @@ client.on('interactionCreate', async (interaction) => {
         return interaction.reply({ content: 'Proses dibatalkan.', ephemeral: true });
       }
 
-      // Mod actions: sendbypass_{userId} or cancel_{userId}
+       // Mod actions: sendbypass_{userId} or cancel_{userId}
       if (/^(sendbypass|cancel)_\d+$/.test(cid)) {
         const [action, userId] = cid.split('_');
         const modUserId = interaction.user.id;
@@ -429,7 +467,6 @@ client.on('interactionCreate', async (interaction) => {
 
       // Member submitted link after uploading screenshot in DM
       if (cid.startsWith('modal_submitlink_')) {
-        // defer reply to avoid interaction expired if long ops
         await interaction.deferReply({ ephemeral: true }).catch(()=>{});
         const userId = cid.split('_')[2];
         if (interaction.user.id !== userId) {
@@ -447,13 +484,11 @@ client.on('interactionCreate', async (interaction) => {
         if (!assigned) return interaction.followUp({ content: 'Tidak ada moderator online saat ini. Coba lagi nanti.', ephemeral: true });
         const mod = MODS[assigned];
 
-        // forward to mod (creates PENDING)
         const ok = await forwardRequestToMod(userId, mod, '(Proof with screenshot)', link);
         if (!ok) {
           return interaction.followUp({ content: 'Gagal menghubungi moderator. Coba lagi nanti.', ephemeral: true });
         }
 
-        // send attachment to mod
         try {
           const modUser = await client.users.fetch(mod.id);
           await modUser.send({ content: `File bukti dari <@${userId}>:`, files: [att.url] }).catch(()=>{});
@@ -462,7 +497,6 @@ client.on('interactionCreate', async (interaction) => {
         HISTORY.push({ type: 'proof_forwarded', userId, toMod: mod.id, link, attachment: att, at: new Date().toISOString() });
         saveHistory(HISTORY);
 
-        // keep PENDING until mod sendbypass or cancel
         TEMP_ATTACH.delete(userId);
         PROOF_TARGET.delete(userId);
 
@@ -513,14 +547,11 @@ client.on('interactionCreate', async (interaction) => {
           const user = await client.users.fetch(userId);
           await user.send({ content: finalMsg }).catch(()=>{});
 
-          // mark paid
           const modAcc = MOD_ID_TO_ACCOUNT[modClickingId];
           if (modAcc) markUserPaid(userId, modAcc);
 
-          // remove PENDING for that user
           if (PENDING.has(userId)) { PENDING.delete(userId); recomputeQueueCounts(); }
 
-          // Try to edit the forwarded message in mod DM to remove buttons
           try {
             const forwardKey = `${modClickingId}_${userId}`;
             const forwardMsgId = FORWARD_MAP.get(forwardKey);
@@ -535,7 +566,7 @@ client.on('interactionCreate', async (interaction) => {
             } else {
               try { await interaction.message?.edit?.({ components: [] }); } catch(e) {}
             }
-          } catch (e) { /* ignore */ }
+          } catch (e) {}
 
           HISTORY.push({ type: 'bypass_sent', to: userId, fromMod: modClickingId, code: bypassCode, note, at: new Date().toISOString() });
           saveHistory(HISTORY);
@@ -568,7 +599,7 @@ client.on('messageCreate', async (message) => {
         try { await message.reply('Screenshot terdeteksi dan disimpan. Tekan SUBMIT untuk mengirim ke moderator.'); } catch (e) {}
       }
 
-      // moderator /on /off in DM
+      // moderator /on /off in DM (support alternative DM toggles)
       const txt = (message.content || '').trim().toLowerCase();
       if (txt === '/off' || txt === '/on') {
         const discordId = message.author.id;
@@ -576,7 +607,9 @@ client.on('messageCreate', async (message) => {
         if (!account) return message.reply('Perintah ini hanya untuk moderator.');
         ONLINE[account] = (txt === '/on');
         await message.reply(`Status: you are now ${ONLINE[account] ? 'ONLINE' : 'OFFLINE'}.`);
-        await refreshAll();
+
+        // IMMEDIATE update pinned embed buttons as well
+        try { await updatePinnedBypassEmbedsButtons(); } catch (e) {}
         return;
       }
     }
