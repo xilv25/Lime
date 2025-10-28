@@ -1,7 +1,3 @@
-// index.js — FINAL (WITH IMMEDIATE /on /off BUTTON DISABLE FIX)
-// All features preserved. Only change: on /on or /off, bot immediately edits existing pinned bypass embed(s)
-// to disable/enable the corresponding moderator button(s).
-
 const fs = require('fs');
 const path = require('path');
 const {
